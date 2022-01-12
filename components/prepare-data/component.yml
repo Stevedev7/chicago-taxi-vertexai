@@ -1,0 +1,61 @@
+name: Prepare data
+inputs:
+- {name: dataset, type: Dataset}
+outputs:
+- {name: X, type: Artifact}
+- name: "Y"
+  type: Artifact
+implementation:
+  container:
+    image: python:3.8-slim
+    command:
+    - sh
+    - -c
+    - |2
+
+      if ! [ -x "$(command -v pip)" ]; then
+          python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
+      fi
+
+      PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'pandas' 'fsspec' 'gcsfs' 'kfp==1.8.9' && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.v2.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      import kfp
+      from kfp.v2 import dsl
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def prepare_data(
+          dataset: Input[Dataset],
+          X: Output[Artifact],
+          Y: Output[Artifact],
+      ):
+          import pandas as pd
+
+          df = pd.read_csv(dataset.uri)
+
+          df.drop(['unique_key', 'taxi_id', 'trip_start_timestamp', 'trip_end_timestamp', 'pickup_census_tract',
+                 'dropoff_census_tract', 'pickup_community_area',
+                 'dropoff_community_area', 'pickup_latitude',
+                 'pickup_longitude', 'pickup_location', 'dropoff_latitude',
+                 'dropoff_longitude', 'dropoff_location'], axis=1, inplace=True)
+
+          df.dropna(inplace=True, axis=0)
+
+          x = df.drop('trip_total', axis=1)
+          y = df.trip_total
+
+          x.to_csv(X.uri, index=False)
+          y.to_csv(Y.uri, index=False)
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - prepare_data

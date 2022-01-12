@@ -1,0 +1,11 @@
+.bash_history
+.cache
+.config
+.docker
+.git
+.ipynb_checkpoints
+.ipython
+.jupyter
+.local
+.ssh
+.yarn 

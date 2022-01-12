@@ -1,0 +1,77 @@
+name: Preprocess
+inputs:
+- {name: X, type: Artifact}
+- name: "Y"
+  type: Artifact
+outputs:
+- {name: X_train, type: Artifact}
+- {name: Y_train, type: Artifact}
+- {name: X_test, type: Artifact}
+- {name: Y_test, type: Artifact}
+- {name: column_transformer, type: Artifact}
+implementation:
+  container:
+    image: python:3.8-slim
+    command:
+    - sh
+    - -c
+    - |2
+
+      if ! [ -x "$(command -v pip)" ]; then
+          python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
+      fi
+
+      PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'pandas' 'fsspec' 'gcsfs' 'sklearn' 'kfp==1.8.9' && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.v2.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      import kfp
+      from kfp.v2 import dsl
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def preprocess(
+          X: Input[Artifact],
+          Y: Input[Artifact],
+          X_train: Output[Artifact],
+          Y_train: Output[Artifact],
+          X_test: Output[Artifact],
+          Y_test: Output[Artifact],
+          column_transformer: Output[Artifact],
+      ):
+          import pandas as pd
+          from pickle import dump
+          from sklearn.compose import ColumnTransformer
+          from sklearn.preprocessing import OneHotEncoder
+          from sklearn.model_selection import train_test_split
+
+          x = pd.read_csv(X.uri)
+          y = pd.read_csv(Y.uri)
+
+          ct = ColumnTransformer(transformers=[('encoder', OneHotEncoder(), [6, 7])], remainder='passthrough')
+          x = ct.fit_transform(x.values)
+
+
+          x_train, x_test, y_train, y_test = train_test_split(x, y.values, test_size=0.2)
+
+          pd.DataFrame(x_train.todense()).to_csv(X_train.uri, index=False)
+
+          pd.DataFrame(y_train).to_csv(Y_train.uri, index=False)
+
+          pd.DataFrame(x_test.todense()).to_csv(X_test.uri, index=False)
+
+          pd.DataFrame(y_test).to_csv(Y_test.uri, index=False)
+
+          with open(column_transformer.path, 'wb') as f:
+              dump(ct, f)
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - preprocess

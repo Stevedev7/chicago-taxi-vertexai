@@ -1,0 +1,68 @@
+name: Test
+inputs:
+- {name: X_test_feature_scaled, type: Artifact}
+- {name: Y_test, type: Artifact}
+- {name: Model, type: Model}
+implementation:
+  container:
+    image: python:3.8-slim
+    command:
+    - sh
+    - -c
+    - |2
+
+      if ! [ -x "$(command -v pip)" ]; then
+          python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
+      fi
+
+      PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'pandas' 'fsspec' 'gcsfs' 'numpy' 'tensorflow' 'sklearn' 'kfp==1.8.9' && "$0" "$@"
+    - sh
+    - -ec
+    - |
+      program_path=$(mktemp -d)
+      printf "%s" "$0" > "$program_path/ephemeral_component.py"
+      python3 -m kfp.v2.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+    - |2+
+
+      import kfp
+      from kfp.v2 import dsl
+      from kfp.v2.dsl import *
+      from typing import *
+
+      def test(
+          X_test_feature_scaled: Input[Artifact],
+          Y_test: Input[Artifact],
+          Model: Input[Model]
+      ):
+          from pickle import load
+          from numpy import array
+          from pandas import read_csv
+          from argparse import ArgumentParser
+          from json import load as json_load, loads as json_loads
+          from sklearn.metrics import mean_absolute_error
+
+
+          # with open(args.x_test, 'r') as f:
+          #     x_test = array(loads(json_load(f)))
+
+          # with open(args.x_test, 'r') as f:
+          #     x = array(json_loads(json_load(f)))
+
+          x_test = read_csv(X_test_feature_scaled.uri)
+          y_test = read_csv(Y_test.uri).values
+
+          with open(Model.path, 'rb') as f:
+              model = load(f)
+
+
+          y_pred = model.predict(x_test)
+
+          mse = mean_absolute_error(y_test, y_pred)
+
+          print(mse)
+
+    args:
+    - --executor_input
+    - {executorInput: null}
+    - --function_to_execute
+    - test
