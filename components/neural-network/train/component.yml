@@ -51,22 +51,21 @@ implementation:
           x_train = read_csv(X_train_feature_scaled.uri).values
           y_train = read_csv(Y_train.uri).values
 
-          model = Sequential()
+          ann = Sequential()
 
-          model.add(layers.Dense(10, activation='relu'))
-          model.add(layers.Dense(512, activation='relu'))
-          model.add(layers.Dense(1, activation='linear'))
+          ann.add(layers.Dense(10, activation='relu'))
+          ann.add(layers.Dense(512, activation='relu'))
+          ann.add(layers.Dense(1, activation='linear'))
 
-          model.compile(
+          ann.compile(
                 loss='mse',
                 optimizer=SGD(learning_rate=0.001),
                 metrics=[MeanAbsoluteError()]
           )
 
-          model.fit(x_train, y_train, batch_size=64, epochs=200)
+          ann.fit(x_train, y_train, batch_size=64, epochs=200)
 
-          with open (Model.path, 'wb') as f:
-              dump(model, f)
+          ann.save(Model.uri.replace("Model", ""))
 
     args:
     - --executor_input

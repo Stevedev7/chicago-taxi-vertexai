@@ -3,6 +3,8 @@ inputs:
 - {name: X_test_feature_scaled, type: Artifact}
 - {name: Y_test, type: Artifact}
 - {name: Model, type: Model}
+outputs:
+- {name: MAE, type: Metrics}
 implementation:
   container:
     image: python:3.8-slim
@@ -32,7 +34,8 @@ implementation:
       def test(
           X_test_feature_scaled: Input[Artifact],
           Y_test: Input[Artifact],
-          Model: Input[Model]
+          Model: Input[Model],
+          MAE: Output[Metrics]
       ):
           from pickle import load
           from numpy import array
@@ -40,26 +43,21 @@ implementation:
           from argparse import ArgumentParser
           from json import load as json_load, loads as json_loads
           from sklearn.metrics import mean_absolute_error
-
-
-          # with open(args.x_test, 'r') as f:
-          #     x_test = array(loads(json_load(f)))
-
-          # with open(args.x_test, 'r') as f:
-          #     x = array(json_loads(json_load(f)))
+          from tensorflow.keras.models import load_model
+          import tensorflow
 
           x_test = read_csv(X_test_feature_scaled.uri)
           y_test = read_csv(Y_test.uri).values
 
-          with open(Model.path, 'rb') as f:
-              model = load(f)
 
+          model = load_model(Model.uri.replace("Model", ""))
 
           y_pred = model.predict(x_test)
 
-          mse = mean_absolute_error(y_test, y_pred)
+          mae = mean_absolute_error(y_test, y_pred)
 
-          print(mse)
+          MAE.log_metric("Mean Absolute Error", float(mae))
+          print(tensorflow.__version__)
 
     args:
     - --executor_input

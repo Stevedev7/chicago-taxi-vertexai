@@ -55,6 +55,35 @@
           }
         }
       },
+      "comp-model-deploy": {
+        "executorLabel": "exec-model-deploy",
+        "inputDefinitions": {
+          "artifacts": {
+            "Model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "Endpoint": {
+              "artifactType": {
+                "schemaTitle": "system.Artifact",
+                "schemaVersion": "0.0.1"
+              }
+            },
+            "output_model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
       "comp-prepare-data": {
         "executorLabel": "exec-prepare-data",
         "inputDefinitions": {
@@ -160,6 +189,16 @@
               }
             }
           }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "MAE": {
+              "artifactType": {
+                "schemaTitle": "system.Metrics",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
         }
       },
       "comp-train": {
@@ -234,6 +273,26 @@
             "image": "python:3.8-slim"
           }
         },
+        "exec-model-deploy": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "model_deploy"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'google-cloud-aiplatform' 'kfp==1.8.9' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef model_deploy(\n    Model: Input[Model],\n    output_model: Output[Model],\n    Endpoint: Output[Artifact]\n):\n    import pickle\n    from google.cloud import aiplatform\n    import time\n\n\n    TIME_STAMP = str(int(time.time()))\n    DISPLAY_NAME = f\"chicago-prediction-{TIME_STAMP}\"\n    MODEL_NAME = f\"chicago-taxi-model-{TIME_STAMP}\"\n    ENDPOINT_NAME = f\"chicago-taxi-endpoint-{TIME_STAMP}\"\n    PROJECT = 'niveustraining'\n    REGION = 'us-central1'\n\n    aiplatform.init(\n        project=PROJECT,\n        location=REGION\n    )\n\n    model = aiplatform.Model.upload(\n        display_name=DISPLAY_NAME,\n        artifact_uri=Model.uri.replace('Model', ''),\n        serving_container_image_uri=\"us-docker.pkg.dev/vertex-ai/prediction/tf2-cpu.2-6:latest\",\n    )\n\n\n\n    endpoint = aiplatform.Endpoint.create(\n        display_name=ENDPOINT_NAME,\n        project=PROJECT,\n        location=REGION,\n    )\n\n    Endpoint.uri = endpoint.resource_name\n\n    model.deploy(\n        endpoint=endpoint,\n        deployed_model_display_name=DISPLAY_NAME,\n        machine_type=\"n1-standard-4\",\n        traffic_split={\"0\": 100}\n    )\n\n    model.wait()\n\n    output_model.uri = model.resource_name\n\n"
+            ],
+            "image": "python:3.8-slim"
+          }
+        },
         "exec-prepare-data": {
           "container": {
             "args": [
@@ -289,7 +348,7 @@
               "sh",
               "-ec",
               "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
-              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef test(\n    X_test_feature_scaled: Input[Artifact],\n    Y_test: Input[Artifact],\n    Model: Input[Model]\n):\n    from pickle import load\n    from numpy import array\n    from pandas import read_csv\n    from argparse import ArgumentParser\n    from json import load as json_load, loads as json_loads\n    from sklearn.metrics import mean_absolute_error\n\n\n    # with open(args.x_test, 'r') as f:\n    #     x_test = array(loads(json_load(f)))\n\n    # with open(args.x_test, 'r') as f:\n    #     x = array(json_loads(json_load(f)))\n\n    x_test = read_csv(X_test_feature_scaled.uri)\n    y_test = read_csv(Y_test.uri).values\n\n    with open(Model.path, 'rb') as f:\n        model = load(f)\n\n\n    y_pred = model.predict(x_test)\n\n    mse = mean_absolute_error(y_test, y_pred)\n\n    print(mse)\n\n"
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef test(\n    X_test_feature_scaled: Input[Artifact],\n    Y_test: Input[Artifact],\n    Model: Input[Model],\n    MAE: Output[Metrics]\n):\n    from pickle import load\n    from numpy import array\n    from pandas import read_csv\n    from argparse import ArgumentParser\n    from json import load as json_load, loads as json_loads\n    from sklearn.metrics import mean_absolute_error\n    from tensorflow.keras.models import load_model\n    import tensorflow\n\n    x_test = read_csv(X_test_feature_scaled.uri)\n    y_test = read_csv(Y_test.uri).values\n\n\n    model = load_model(Model.uri.replace(\"Model\", \"\"))\n\n    y_pred = model.predict(x_test)\n\n    mae = mean_absolute_error(y_test, y_pred)\n\n    MAE.log_metric(\"Mean Absolute Error\", float(mae))\n    print(tensorflow.__version__)\n\n"
             ],
             "image": "python:3.8-slim"
           }
@@ -309,7 +368,7 @@
               "sh",
               "-ec",
               "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
-              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef train(\n    X_train_feature_scaled: Input[Artifact],\n    Y_train: Input[Artifact],\n    Model: Output[Model]\n):\n    from numpy import array\n    from pickle import dump\n    from pandas import read_csv\n    from tensorflow.keras import layers\n    from tensorflow.keras import Sequential\n    from tensorflow.keras.optimizers import SGD\n    from tensorflow.keras.metrics import MeanAbsoluteError\n    from json import load, loads\n\n    # print(Y_train.uri, Y_train.path)\n    print(X_train_feature_scaled.uri)\n    # with open(X_train.path, 'r') as f:\n    #     x_train = array(loads(load(f)))\n    x_train = read_csv(X_train_feature_scaled.uri).values\n    y_train = read_csv(Y_train.uri).values\n\n    model = Sequential()\n\n    model.add(layers.Dense(10, activation='relu'))\n    model.add(layers.Dense(512, activation='relu'))\n    model.add(layers.Dense(1, activation='linear'))\n\n    model.compile(\n          loss='mse',\n          optimizer=SGD(learning_rate=0.001),\n          metrics=[MeanAbsoluteError()]\n    )\n\n    model.fit(x_train, y_train, batch_size=64, epochs=200)\n\n    with open (Model.path, 'wb') as f:\n        dump(model, f)\n\n"
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef train(\n    X_train_feature_scaled: Input[Artifact],\n    Y_train: Input[Artifact],\n    Model: Output[Model]\n):\n    from numpy import array\n    from pickle import dump\n    from pandas import read_csv\n    from tensorflow.keras import layers\n    from tensorflow.keras import Sequential\n    from tensorflow.keras.optimizers import SGD\n    from tensorflow.keras.metrics import MeanAbsoluteError\n    from json import load, loads\n\n    # print(Y_train.uri, Y_train.path)\n    print(X_train_feature_scaled.uri)\n    # with open(X_train.path, 'r') as f:\n    #     x_train = array(loads(load(f)))\n    x_train = read_csv(X_train_feature_scaled.uri).values\n    y_train = read_csv(Y_train.uri).values\n\n    ann = Sequential()\n\n    ann.add(layers.Dense(10, activation='relu'))\n    ann.add(layers.Dense(512, activation='relu'))\n    ann.add(layers.Dense(1, activation='linear'))\n\n    ann.compile(\n          loss='mse',\n          optimizer=SGD(learning_rate=0.001),\n          metrics=[MeanAbsoluteError()]\n    )\n\n    ann.fit(x_train, y_train, batch_size=64, epochs=200)\n\n    ann.save(Model.uri.replace(\"Model\", \"\"))\n\n"
             ],
             "image": "python:3.8-slim"
           }
@@ -321,6 +380,18 @@
     },
     "root": {
       "dag": {
+        "outputs": {
+          "artifacts": {
+            "test-MAE": {
+              "artifactSelectors": [
+                {
+                  "outputArtifactKey": "MAE",
+                  "producerSubtask": "test"
+                }
+              ]
+            }
+          }
+        },
         "tasks": {
           "feature-scale": {
             "cachingOptions": {
@@ -361,6 +432,30 @@
             },
             "taskInfo": {
               "name": "get-data"
+            }
+          },
+          "model-deploy": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-model-deploy"
+            },
+            "dependentTasks": [
+              "train"
+            ],
+            "inputs": {
+              "artifacts": {
+                "Model": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "Model",
+                    "producerTask": "train"
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "model-deploy"
             }
           },
           "prepare-data": {
@@ -484,6 +579,16 @@
             },
             "taskInfo": {
               "name": "train"
+            }
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "test-MAE": {
+            "artifactType": {
+              "schemaTitle": "system.Metrics",
+              "schemaVersion": "0.0.1"
             }
           }
         }
